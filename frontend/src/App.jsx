@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+const BACKEND_URL =
+  import.meta.env.VITE_BACKEND_URL || 'https://amazon-pay-bot.onrender.com';
 
 function MessageBubble({ author, text }) {
   const isBot = author === 'bot';
@@ -108,7 +109,7 @@ export default function App() {
           />
           <div className='wa-meta'>
             <div className='wa-title'>
-              Amazon Pay Gift Cards powered by Pine Labs
+              Amazon Pay Gift Card by Pine Labs
               <img
                 className='wa-blue-tick'
                 src='/blue-tick.png'

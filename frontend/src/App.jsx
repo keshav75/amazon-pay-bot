@@ -130,8 +130,10 @@ export default function App() {
           {ui && !showPicker && (
             <ActionBubble
               ui={ui}
-              onOpen={kind => {
-                if (kind === 'start') {
+              onOpen={(kind, payload) => {
+                const isStart =
+                  kind === 'start' || payload?.options?.[0]?.id === 'start';
+                if (isStart) {
                   setUi(null);
                   sendMessage('start');
                 } else {
@@ -349,8 +351,10 @@ function AmountModal({ ui, onSelect, onClose }) {
 }
 
 function ActionBubble({ ui, onOpen }) {
+  const inferredStart =
+    ui.options && ui.options.length === 1 && ui.options[0].id === 'start';
   const label =
-    ui.kind === 'start'
+    ui.kind === 'start' || inferredStart
       ? 'Buy a Gift Card'
       : ui.kind === 'buyerTypeOptions'
       ? 'Choose buyer type'
@@ -362,12 +366,12 @@ function ActionBubble({ ui, onOpen }) {
       ? 'Select amount'
       : ui.kind === 'confirm'
       ? 'Review & confirm'
-      : 'Open';
+      : (ui.options && ui.options[0]?.label) || 'Open';
 
   return (
     <div className='row left'>
       <div className='bubble bot'>
-        <button className='action-button' onClick={() => onOpen(ui.kind)}>
+        <button className='action-button' onClick={() => onOpen(ui.kind, ui)}>
           Open • {label}
         </button>
       </div>

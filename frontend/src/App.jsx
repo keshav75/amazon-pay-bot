@@ -241,19 +241,23 @@ export default function App() {
           </Modal>
         )}
 
-        <div className='wa-input-bar'>
+        <form
+          className='wa-input-bar'
+          onSubmit={e => {
+            e.preventDefault();
+            sendMessage();
+          }}>
           <input
             type='text'
-            placeholder={loading ? 'Type a message' : 'Type a message'}
+            placeholder='Type a message'
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={loading}
           />
-          <button onClick={sendMessage} disabled={loading || !input.trim()}>
+          <button type='submit' disabled={!input.trim()}>
             Send
           </button>
-        </div>
+        </form>
       </div>
     </div>
   );

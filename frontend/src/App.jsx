@@ -128,9 +128,40 @@ export default function App() {
           ))}
           <div ref={bottomRef} />
           {ui && !showPicker && (
-            <ActionBubble ui={ui} onOpen={() => setShowPicker(true)} />
+            <ActionBubble
+              ui={ui}
+              onOpen={kind => {
+                if (kind === 'start') {
+                  setUi(null);
+                  sendMessage('start');
+                } else {
+                  setShowPicker(true);
+                }
+              }}
+            />
           )}
         </div>
+        {ui?.kind === 'buyerTypeOptions' && showPicker && (
+          <Modal
+            title='Who are you buying for?'
+            onClose={() => setShowPicker(false)}>
+            <div className='option-grid'>
+              {ui.options?.map(o => (
+                <button
+                  key={o.id}
+                  className='option'
+                  onClick={() => {
+                    setShowPicker(false);
+                    setUi(null);
+                    sendMessage(o.id);
+                  }}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </Modal>
+        )}
+
         {ui?.kind === 'occasionOptions' && showPicker && (
           <Modal
             title='Select an occasion'
@@ -319,7 +350,11 @@ function AmountModal({ ui, onSelect, onClose }) {
 
 function ActionBubble({ ui, onOpen }) {
   const label =
-    ui.kind === 'occasionOptions'
+    ui.kind === 'start'
+      ? 'Buy a Gift Card'
+      : ui.kind === 'buyerTypeOptions'
+      ? 'Choose buyer type'
+      : ui.kind === 'occasionOptions'
       ? 'Choose occasion'
       : ui.kind === 'templatePicker'
       ? 'Choose template'
@@ -332,7 +367,7 @@ function ActionBubble({ ui, onOpen }) {
   return (
     <div className='row left'>
       <div className='bubble bot'>
-        <button className='action-button' onClick={onOpen}>
+        <button className='action-button' onClick={() => onOpen(ui.kind)}>
           Open • {label}
         </button>
       </div>

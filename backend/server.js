@@ -124,12 +124,51 @@ app.post('/chat', (req, res) => {
     let reply = '';
     let ui = undefined; // optional UI hints for frontend (options, templates, confirm)
 
+    // Global restart handler: if user says hi/hello/hey at any time, show welcome + Start button
+    if (/\b(hi|hello|hey)\b/i.test(userMessage)) {
+      state.stage = 'awaitStart';
+      state.data = {};
+      reply =
+        '👋 Welcome to Amazon Pay Gift Cards – powered by Pine Labs!\n🎁 The simplest way to buy, gift, and share Amazon Pay Gift Cards – anytime, anywhere.\n\n✅ Instantly purchase gift cards\n✅ Share with friends & family on WhatsApp\n\nTap below to get started 👇\n\n🛒 Buy a Gift Card Now';
+      ui = {
+        kind: 'start',
+        options: [{ id: 'start', label: 'Buy a Gift Card' }]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
     // Greeting only when user says hi/hello/hey
     if (state.stage === 'idle') {
       if (/\b(hi|hello|hey)\b/i.test(userMessage)) {
+        reply = 'Are you buying for yourself or for business?';
+        state.stage = 'askBuyerType';
+        ui = {
+          kind: 'buyerTypeOptions',
+          options: [
+            { id: 'personal', label: 'Personal / Self' },
+            { id: 'business', label: 'Business' }
+          ]
+        };
+        return res.json({ reply, sessionId, ui });
+      }
+      reply = "Please say 'hi' to begin.";
+      return res.json({ reply, sessionId });
+    }
+
+    // Buyer type selection
+    if (state.stage === 'askBuyerType') {
+      const text = userMessage.trim().toLowerCase();
+      if (text === '2' || text === 'business') {
+        state.stage = 'idle';
+        state.data = {};
         reply =
-          '👋 Welcome to Amazon Pay Gift Cards – powered by Pine Labs!\n🎁 The simplest way to buy, gift, and share Amazon Pay Gift Cards – anytime, anywhere.\n\n✅ Instantly purchase gift cards\n✅ Share with friends & family on WhatsApp\n\nTap below to get started 👇\n\n🛒 Buy a Gift Card Now';
+          'For business purchases, please use our WhatsApp business flow: https://wa.me/';
+        return res.json({ reply, sessionId });
+      }
+      if (text === '1' || text === 'personal' || text === 'self') {
+        state.data.buyerType = 'personal';
         state.stage = 'askOccasion';
+        reply = 'For what occasion you want to buy a gift card?';
         ui = {
           kind: 'occasionOptions',
           options: [
@@ -141,8 +180,41 @@ app.post('/chat', (req, res) => {
         };
         return res.json({ reply, sessionId, ui });
       }
-      reply = "Please say 'hi' to begin.";
-      return res.json({ reply, sessionId });
+      // re-ask if invalid
+      reply = 'Please choose Personal/Self or Business.';
+      ui = {
+        kind: 'buyerTypeOptions',
+        options: [
+          { id: 'personal', label: 'Personal / Self' },
+          { id: 'business', label: 'Business' }
+        ]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    // Awaiting explicit Start button click
+    if (state.stage === 'awaitStart') {
+      const text = userMessage.trim().toLowerCase();
+      if (text === 'start' || text.includes('buy')) {
+        state.stage = 'askBuyerType';
+        reply =
+          '✨ Great! Let’s get started. Please tell us who you’re buying for:\n\n1️⃣ For Myself / Friends & Family\n2️⃣ For Business / Employees / Clients\n\n👉 Just reply with 1 or 2 to continue.';
+        ui = {
+          kind: 'buyerTypeOptions',
+          options: [
+            { id: 'personal', label: 'Personal / Self' },
+            { id: 'business', label: 'Business' }
+          ]
+        };
+        return res.json({ reply, sessionId, ui });
+      }
+      // Re-prompt start
+      reply = 'Tap the button to begin: Buy a Gift Card';
+      ui = {
+        kind: 'start',
+        options: [{ id: 'start', label: 'Buy a Gift Card' }]
+      };
+      return res.json({ reply, sessionId, ui });
     }
 
     // Ask Occasion (with Other -> custom text)
@@ -304,22 +376,19 @@ app.post('/chat', (req, res) => {
       const text = userMessage.toLowerCase();
       if (text === 'confirm') {
         const link = generateGiftLink();
-        const receipt = {
-          orderId: generateSessionId().slice(0, 8),
-          occasion: state.data.occasion,
-          templateId: state.data.templateId,
-          amount: state.data.amount,
-          currency: 'INR',
-          recipient: { type: 'email', value: state.data.recipientEmail },
-          personalMessage: state.data.personalMessage || null,
-          giftLink: link
-        };
         state.stage = 'completed';
-        reply = `🎉 Success! Your gift card is ready.\nGift link: ${link}\n\nDetails:\n${JSON.stringify(
-          receipt,
-          null,
-          2
-        )}`;
+        const lines = [
+          '🎉 Success! Your gift card is sent on recipient email.',
+          `Gift link: ${link}`,
+          '',
+          'Details:',
+          `- Occasion: ${state.data.occasion}`,
+          `- Template: ${state.data.templateId}`,
+          `- Amount: ${formatCurrencyInr(state.data.amount)}`,
+          `- Recipient: ${state.data.recipientEmail}`,
+          `- Message: ${state.data.personalMessage || '(none)'}`
+        ];
+        reply = lines.join('\n');
         return res.json({ reply, sessionId });
       }
       if (text === 'cancel') {

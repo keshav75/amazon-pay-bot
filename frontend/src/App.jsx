@@ -212,18 +212,11 @@ export default function App() {
               onSubmit={data => {
                 setShowPicker(false);
                 setUi(null);
-                // Send fields in sequence to backend
-                (async () => {
-                  await sendMessage(data.name);
-                  await new Promise(r => setTimeout(r, 50));
-                  await sendMessage(data.company);
-                  await new Promise(r => setTimeout(r, 50));
-                  await sendMessage(data.email);
-                  await new Promise(r => setTimeout(r, 50));
-                  await sendMessage(data.phone);
-                  await new Promise(r => setTimeout(r, 50));
-                  await sendMessage(data.gstin || 'skip');
-                })();
+                // Send single batch payload to backend to avoid multiple chat lines
+                const payload = `lead|${data.name}|${data.company}|${
+                  data.email
+                }|${data.phone}|${data.gstin || 'skip'}`;
+                sendMessage(payload);
               }}
             />
           </Modal>

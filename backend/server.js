@@ -69,6 +69,23 @@ function normalizeAmount(message) {
   return value;
 }
 
+function parseBatchLead(message) {
+  // Expected format: lead|name|company|email|phone|gstin
+  if (!message) return null;
+  const raw = String(message);
+  if (!raw.toLowerCase().startsWith('lead|')) return null;
+  const parts = raw.split('|');
+  // parts[0] = lead
+  const [_, name, company, email, phone, gstin] = parts;
+  return {
+    name: (name || '').trim(),
+    company: (company || '').trim(),
+    email: (email || '').trim(),
+    phone: (phone || '').trim(),
+    gstin: (gstin || '').trim()
+  };
+}
+
 function generateBusinessRequestId() {
   const year = new Date().getFullYear();
   return `GC${year}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
@@ -244,63 +261,42 @@ app.post('/chat', (req, res) => {
         };
         return res.json({ reply, sessionId, ui });
       }
-      // proceed to lead capture
-      state.stage = 'bizLeadName';
+      // proceed to lead capture (single-step form allowed)
+      state.stage = 'bizLead';
       reply = 'Please share your business details';
       ui = { kind: 'bizLeadForm' };
       return res.json({ reply, sessionId, ui });
     }
 
-    if (state.stage === 'bizLeadName') {
-      if (!userMessage) {
-        reply = 'Please enter your Full Name';
-        return res.json({ reply, sessionId });
+    if (state.stage === 'bizLead') {
+      // Accept batch string from frontend (lead|name|company|email|phone|gstin)
+      const batch = parseBatchLead(userMessage);
+      if (!batch) {
+        // fallback: show form again
+        reply = 'Please share your business details';
+        ui = { kind: 'bizLeadForm' };
+        return res.json({ reply, sessionId, ui });
       }
-      state.data.biz.name = userMessage;
-      state.stage = 'bizLeadCompany';
-      reply = 'Company Name?';
-      return res.json({ reply, sessionId });
-    }
-
-    if (state.stage === 'bizLeadCompany') {
-      if (!userMessage) {
-        reply = 'Please enter Company Name';
-        return res.json({ reply, sessionId });
+      // validate
+      if (!batch.name || !batch.company || !isValidEmail(batch.email)) {
+        reply = 'Please provide valid Name, Company and Official Email.';
+        ui = { kind: 'bizLeadForm' };
+        return res.json({ reply, sessionId, ui });
       }
-      state.data.biz.company = userMessage;
-      state.stage = 'bizLeadEmail';
-      reply = 'Official Email ID?';
-      return res.json({ reply, sessionId });
-    }
-
-    if (state.stage === 'bizLeadEmail') {
-      if (!isValidEmail(userMessage)) {
-        reply = 'Please enter a valid official email';
-        return res.json({ reply, sessionId });
-      }
-      state.data.biz.email = userMessage;
-      state.stage = 'bizLeadPhone';
-      reply = 'Phone Number?';
-      return res.json({ reply, sessionId });
-    }
-
-    if (state.stage === 'bizLeadPhone') {
       const phoneOk = /^\+?\d{10,15}$/.test(
-        String(userMessage).replace(/\s|-/g, '')
+        String(batch.phone).replace(/\s|-/g, '')
       );
       if (!phoneOk) {
-        reply = 'Please enter a valid phone number';
-        return res.json({ reply, sessionId });
+        reply = 'Please provide a valid phone number.';
+        ui = { kind: 'bizLeadForm' };
+        return res.json({ reply, sessionId, ui });
       }
-      state.data.biz.phone = String(userMessage).replace(/\s|-/g, '');
-      state.stage = 'bizLeadGstin';
-      reply = 'Business GSTIN? (optional, type skip)';
-      return res.json({ reply, sessionId });
-    }
-
-    if (state.stage === 'bizLeadGstin') {
+      state.data.biz.name = batch.name;
+      state.data.biz.company = batch.company;
+      state.data.biz.email = batch.email;
+      state.data.biz.phone = String(batch.phone).replace(/\s|-/g, '');
       state.data.biz.gstin =
-        userMessage && userMessage.toLowerCase() !== 'skip' ? userMessage : '';
+        batch.gstin && batch.gstin.toLowerCase() !== 'skip' ? batch.gstin : '';
       state.data.biz.requestId = generateBusinessRequestId();
       state.stage = 'bizNeedsOccasion';
       reply = `✅ Thanks, ${

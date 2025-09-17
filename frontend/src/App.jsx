@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL || 'https://amazon-pay-bot.onrender.com';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
 function MessageBubble({ author, text }) {
   const isBot = author === 'bot';
@@ -127,19 +126,40 @@ export default function App() {
             <MessageBubble key={i} author={m.author} text={m.text} />
           ))}
           <div ref={bottomRef} />
-          {ui && !showPicker && (
-            <ActionBubble
-              ui={ui}
-              onOpen={(kind, payload) => {
-                const isStart =
-                  kind === 'start' || payload?.options?.[0]?.id === 'start';
-                if (isStart) {
-                  setUi(null);
-                  sendMessage('start');
-                } else {
-                  setShowPicker(true);
+          {ui &&
+            !showPicker &&
+            ui.kind !== 'download' &&
+            ui.kind !== 'downloads' && (
+              <ActionBubble
+                ui={ui}
+                onOpen={(kind, payload) => {
+                  const isStart =
+                    kind === 'start' || payload?.options?.[0]?.id === 'start';
+                  if (isStart) {
+                    setUi(null);
+                    sendMessage('start');
+                  } else {
+                    setShowPicker(true);
+                  }
+                }}
+              />
+            )}
+
+          {ui?.kind === 'downloads' && !showPicker && (
+            <DownloadsBubble
+              items={ui.items}
+              onContinue={() => sendMessage('continue')}
+            />
+          )}
+          {ui?.kind === 'download' && !showPicker && (
+            <DownloadsBubble
+              items={[
+                {
+                  label: ui.label || 'Download',
+                  url: ui.url || '/gst-invoice.pdf'
                 }
-              }}
+              ]}
+              onContinue={() => sendMessage('continue')}
             />
           )}
         </div>
@@ -161,6 +181,50 @@ export default function App() {
                 </button>
               ))}
             </div>
+          </Modal>
+        )}
+
+        {ui?.kind === 'options' && showPicker && (
+          <Modal
+            title={ui.title || 'Select an option'}
+            onClose={() => setShowPicker(false)}>
+            <div className='option-grid'>
+              {ui.options?.map(o => (
+                <button
+                  key={o.id}
+                  className='option'
+                  onClick={() => {
+                    setShowPicker(false);
+                    setUi(null);
+                    sendMessage(o.id);
+                  }}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </Modal>
+        )}
+
+        {ui?.kind === 'bizLeadForm' && showPicker && (
+          <Modal title='Business details' onClose={() => setShowPicker(false)}>
+            <BizLeadForm
+              onSubmit={data => {
+                setShowPicker(false);
+                setUi(null);
+                // Send fields in sequence to backend
+                (async () => {
+                  await sendMessage(data.name);
+                  await new Promise(r => setTimeout(r, 50));
+                  await sendMessage(data.company);
+                  await new Promise(r => setTimeout(r, 50));
+                  await sendMessage(data.email);
+                  await new Promise(r => setTimeout(r, 50));
+                  await sendMessage(data.phone);
+                  await new Promise(r => setTimeout(r, 50));
+                  await sendMessage(data.gstin || 'skip');
+                })();
+              }}
+            />
           </Modal>
         )}
 
@@ -274,6 +338,58 @@ export default function App() {
           </Modal>
         )}
 
+        {ui?.kind === 'uploadPO' && showPicker && (
+          <Modal
+            title='Upload Purchase Order'
+            onClose={() => setShowPicker(false)}>
+            <div className='upload-box'>
+              <div className='upload-icon'>📄</div>
+              <div className='muted small'>Select a PDF file to upload</div>
+              <div
+                className='button-row'
+                style={{ justifyContent: 'flex-end', marginTop: 10 }}>
+                <button
+                  className='confirm'
+                  onClick={() => {
+                    setShowPicker(false);
+                    setUi(null);
+                    sendMessage('po_uploaded.pdf');
+                  }}>
+                  Upload PDF
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
+
+        {ui?.kind === 'payment' && showPicker && (
+          <Modal
+            title='Mock Payment Gateway'
+            onClose={() => setShowPicker(false)}>
+            <PaymentForm
+              onSubmit={() => {
+                setShowPicker(false);
+                setUi(null);
+                sendMessage('paid');
+              }}
+            />
+          </Modal>
+        )}
+
+        {ui?.kind === 'download' && showPicker && (
+          <Modal title='Invoice' onClose={() => setShowPicker(false)}>
+            <div className='download-box'>
+              <div className='pdf-preview'>📄</div>
+              <a
+                className='download-link'
+                href={ui.url || '/invoice.pdf'}
+                download>
+                {ui.label || 'Download'}
+              </a>
+            </div>
+          </Modal>
+        )}
+
         <form
           className='wa-input-bar'
           onSubmit={e => {
@@ -350,6 +466,57 @@ function AmountModal({ ui, onSelect, onClose }) {
   );
 }
 
+function BizLeadForm({ onSubmit }) {
+  const [name, setName] = useState('');
+  const [company, setCompany] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [gstin, setGstin] = useState('');
+  return (
+    <form
+      className='lead-form'
+      onSubmit={e => {
+        e.preventDefault();
+        onSubmit({ name, company, email, phone, gstin });
+      }}>
+      <label>Full Name</label>
+      <input value={name} onChange={e => setName(e.target.value)} required />
+      <label>Company Name</label>
+      <input
+        value={company}
+        onChange={e => setCompany(e.target.value)}
+        required
+      />
+      <label>Official Email ID</label>
+      <input
+        type='email'
+        value={email}
+        onChange={e => setEmail(e.target.value)}
+        required
+      />
+      <label>Phone Number</label>
+      <input
+        inputMode='numeric'
+        value={phone}
+        onChange={e => setPhone(e.target.value)}
+        required
+      />
+      <label>Business GSTIN (optional)</label>
+      <input
+        value={gstin}
+        onChange={e => setGstin(e.target.value)}
+        placeholder='Type skip if not available'
+      />
+      <div
+        className='button-row'
+        style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+        <button className='confirm' type='submit'>
+          Submit
+        </button>
+      </div>
+    </form>
+  );
+}
 function ActionBubble({ ui, onOpen }) {
   const inferredStart =
     ui.options && ui.options.length === 1 && ui.options[0].id === 'start';
@@ -358,6 +525,8 @@ function ActionBubble({ ui, onOpen }) {
       ? 'Buy a Gift Card'
       : ui.kind === 'buyerTypeOptions'
       ? 'Choose buyer type'
+      : ui.kind === 'options'
+      ? ui.title || 'Choose option'
       : ui.kind === 'occasionOptions'
       ? 'Choose occasion'
       : ui.kind === 'templatePicker'
@@ -374,6 +543,87 @@ function ActionBubble({ ui, onOpen }) {
         <button className='action-button' onClick={() => onOpen(ui.kind, ui)}>
           Open • {label}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function PaymentForm({ onSubmit }) {
+  const [method, setMethod] = useState('upi');
+  const [input, setInput] = useState('');
+  return (
+    <form
+      className='lead-form'
+      onSubmit={e => {
+        e.preventDefault();
+        onSubmit({ method, input });
+      }}>
+      <label>Payment Method</label>
+      <div className='option-grid'>
+        <button
+          type='button'
+          className='option'
+          onClick={() => setMethod('upi')}>
+          UPI
+        </button>
+        <button
+          type='button'
+          className='option'
+          onClick={() => setMethod('card')}>
+          Card
+        </button>
+        <button
+          type='button'
+          className='option'
+          onClick={() => setMethod('netbanking')}>
+          Netbanking
+        </button>
+      </div>
+      <label>
+        {method === 'card'
+          ? 'Card Number'
+          : method === 'upi'
+          ? 'UPI ID'
+          : 'Account / Ref ID'}
+      </label>
+      <input value={input} onChange={e => setInput(e.target.value)} required />
+      <div
+        className='button-row'
+        style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+        <button className='confirm' type='submit'>
+          Pay Now
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function DownloadsBubble({ items, onContinue }) {
+  const list =
+    Array.isArray(items) && items.length > 0
+      ? items
+      : [
+          { label: 'GST Invoice (PDF)', url: '/gst-invoice.pdf' },
+          { label: 'GC Delivery (PDF)', url: '/gc-delivery.pdf' },
+          { label: 'PO (PDF)', url: '/po.pdf' }
+        ];
+  return (
+    <div className='row left'>
+      <div className='bubble bot'>
+        <div className='file-chips'>
+          {list.map((it, idx) => (
+            <a key={idx} className='file-chip' href={it.url} download>
+              📄 {it.label}
+            </a>
+          ))}
+        </div>
+        {onContinue && (
+          <div className='button-row' style={{ marginTop: 8 }}>
+            <button className='confirm' onClick={onContinue}>
+              Continue
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

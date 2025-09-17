@@ -69,6 +69,11 @@ function normalizeAmount(message) {
   return value;
 }
 
+function generateBusinessRequestId() {
+  const year = new Date().getFullYear();
+  return `GC${year}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+}
+
 function isValidEmail(text) {
   const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return re.test(String(text).toLowerCase());
@@ -159,11 +164,20 @@ app.post('/chat', (req, res) => {
     if (state.stage === 'askBuyerType') {
       const text = userMessage.trim().toLowerCase();
       if (text === '2' || text === 'business') {
-        state.stage = 'idle';
-        state.data = {};
+        // Begin business flow
+        state.stage = 'bizWelcome';
+        state.data.biz = { checksToday: 0 };
         reply =
-          'For business purchases, please use our WhatsApp business flow: https://wa.me/';
-        return res.json({ reply, sessionId });
+          'Would you like to explore gift card solutions for your business?';
+        ui = {
+          kind: 'options',
+          title: 'Business solutions',
+          options: [
+            { id: 'yes', label: '✅ Yes, get started' },
+            { id: 'how', label: 'ℹ️ How does it work' }
+          ]
+        };
+        return res.json({ reply, sessionId, ui });
       }
       if (text === '1' || text === 'personal' || text === 'self') {
         state.data.buyerType = 'personal';
@@ -213,6 +227,379 @@ app.post('/chat', (req, res) => {
       ui = {
         kind: 'start',
         options: [{ id: 'start', label: 'Buy a Gift Card' }]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    // ===== Business Flow =====
+    if (state.stage === 'bizWelcome') {
+      const text = userMessage.trim().toLowerCase();
+      if (text === 'how') {
+        reply =
+          'We capture your requirements, verify eligibility for discounts, share a quotation and PI, then process payment and issue gift cards within agreed timelines.';
+        ui = {
+          kind: 'options',
+          title: 'Continue?',
+          options: [{ id: 'yes', label: '✅ Yes, get started' }]
+        };
+        return res.json({ reply, sessionId, ui });
+      }
+      // proceed to lead capture
+      state.stage = 'bizLeadName';
+      reply = 'Please share your business details';
+      ui = { kind: 'bizLeadForm' };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizLeadName') {
+      if (!userMessage) {
+        reply = 'Please enter your Full Name';
+        return res.json({ reply, sessionId });
+      }
+      state.data.biz.name = userMessage;
+      state.stage = 'bizLeadCompany';
+      reply = 'Company Name?';
+      return res.json({ reply, sessionId });
+    }
+
+    if (state.stage === 'bizLeadCompany') {
+      if (!userMessage) {
+        reply = 'Please enter Company Name';
+        return res.json({ reply, sessionId });
+      }
+      state.data.biz.company = userMessage;
+      state.stage = 'bizLeadEmail';
+      reply = 'Official Email ID?';
+      return res.json({ reply, sessionId });
+    }
+
+    if (state.stage === 'bizLeadEmail') {
+      if (!isValidEmail(userMessage)) {
+        reply = 'Please enter a valid official email';
+        return res.json({ reply, sessionId });
+      }
+      state.data.biz.email = userMessage;
+      state.stage = 'bizLeadPhone';
+      reply = 'Phone Number?';
+      return res.json({ reply, sessionId });
+    }
+
+    if (state.stage === 'bizLeadPhone') {
+      const phoneOk = /^\+?\d{10,15}$/.test(
+        String(userMessage).replace(/\s|-/g, '')
+      );
+      if (!phoneOk) {
+        reply = 'Please enter a valid phone number';
+        return res.json({ reply, sessionId });
+      }
+      state.data.biz.phone = String(userMessage).replace(/\s|-/g, '');
+      state.stage = 'bizLeadGstin';
+      reply = 'Business GSTIN? (optional, type skip)';
+      return res.json({ reply, sessionId });
+    }
+
+    if (state.stage === 'bizLeadGstin') {
+      state.data.biz.gstin =
+        userMessage && userMessage.toLowerCase() !== 'skip' ? userMessage : '';
+      state.data.biz.requestId = generateBusinessRequestId();
+      state.stage = 'bizNeedsOccasion';
+      reply = `✅ Thanks, ${
+        state.data.biz.name.split(' ')[0] || 'there'
+      }. Your request has been logged with Request ID ${
+        state.data.biz.requestId
+      }.\n\nPlease help us with your requirement. Choose an occasion:`;
+      ui = {
+        kind: 'options',
+        title: 'Select Occasion',
+        options: [
+          { id: 'rewards', label: 'Rewards' },
+          { id: 'festival', label: 'Festival' },
+          { id: 'incentive', label: 'Incentive' },
+          { id: 'sales', label: 'Sales Promo' }
+        ]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizNeedsOccasion') {
+      state.data.biz.occasion = userMessage.toLowerCase();
+      state.stage = 'bizNeedsDenomination';
+      reply = 'Choose a denomination:';
+      ui = {
+        kind: 'options',
+        title: 'Denomination',
+        options: [
+          { id: '100', label: '₹100' },
+          { id: '500', label: '₹500' },
+          { id: '1000', label: '₹1,000' },
+          { id: 'custom', label: 'Custom' }
+        ]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizNeedsDenomination') {
+      const t = userMessage.toLowerCase();
+      if (t === 'custom') {
+        state.stage = 'bizNeedsDenominationCustom';
+        reply = 'Enter custom denomination (₹):';
+        return res.json({ reply, sessionId });
+      }
+      const amt = normalizeAmount(userMessage);
+      if (!amt || amt <= 0) {
+        reply = 'Please enter a valid denomination (₹)';
+        return res.json({ reply, sessionId });
+      }
+      state.data.biz.denomination = amt;
+      state.stage = 'bizNeedsBudget';
+      reply = 'Estimated total budget (₹)?';
+      return res.json({ reply, sessionId });
+    }
+
+    if (state.stage === 'bizNeedsDenominationCustom') {
+      const amt = normalizeAmount(userMessage);
+      if (!amt || amt <= 0) {
+        reply = 'Please enter a valid denomination (₹)';
+        return res.json({ reply, sessionId });
+      }
+      state.data.biz.denomination = amt;
+      state.stage = 'bizNeedsBudget';
+      reply = 'Estimated total budget (₹)?';
+      return res.json({ reply, sessionId });
+    }
+
+    if (state.stage === 'bizNeedsBudget') {
+      const budget = normalizeAmount(userMessage);
+      if (!budget || budget <= 0) {
+        reply = 'Please enter a valid budget (₹)';
+        return res.json({ reply, sessionId });
+      }
+      state.data.biz.budget = budget;
+      state.stage = 'bizNeedsDelivery';
+      reply = 'Preferred delivery method?';
+      ui = {
+        kind: 'options',
+        title: 'Delivery method',
+        options: [
+          { id: 'bulk', label: 'Bulk File' },
+          { id: 'direct', label: 'Direct SMS & Email' }
+        ]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizNeedsDelivery') {
+      state.data.biz.delivery = userMessage.toLowerCase();
+      state.stage = 'bizDiscount';
+      reply =
+        'We offer up to 2% discount for verified businesses. Checking eligibility...\n\n✅ GSTIN check: Valid\n✅ Email check: Verified company domain\n\n🎉 You are eligible for a 2% business discount.';
+      ui = {
+        kind: 'options',
+        title: 'Continue',
+        options: [{ id: 'continue', label: 'Proceed to quotation' }]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizDiscount') {
+      const denom = state.data.biz.denomination;
+      const budget = state.data.biz.budget;
+      const count = Math.max(1, Math.floor(budget / denom));
+      const gross = denom * count;
+      const discount = Math.round(gross * 0.02);
+      const net = gross - discount;
+      state.data.biz.quote = { count, denom, gross, discount, net };
+      state.stage = 'bizQuote';
+      reply = `💰 Based on your inputs:\n\n• ${count} gift cards @ ${formatCurrencyInr(
+        denom
+      )} each = ${formatCurrencyInr(
+        gross
+      )}\n• Business discount (2%): -${formatCurrencyInr(
+        discount
+      )}\n• Net Payable: ${formatCurrencyInr(net)}\n• Delivery: ${
+        state.data.biz.delivery === 'bulk'
+          ? 'Bulk CSV within 24 hrs'
+          : 'Direct SMS & Email'
+      }\n• Platform fee: Waived\n\nWould you like us to generate a Proforma Invoice (PI)?`;
+      ui = {
+        kind: 'options',
+        title: 'Quotation',
+        options: [
+          { id: 'yes', label: '✅ Yes, share PI' },
+          { id: 'edit', label: '✏️ Edit requirements' }
+        ]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizQuote') {
+      const t = userMessage.toLowerCase();
+      if (t === 'edit') {
+        state.stage = 'bizNeedsOccasion';
+        reply = 'Let’s update your requirements. Choose an occasion:';
+        ui = {
+          kind: 'options',
+          title: 'Select Occasion',
+          options: [
+            { id: 'rewards', label: 'Rewards' },
+            { id: 'festival', label: 'Festival' },
+            { id: 'incentive', label: 'Incentive' },
+            { id: 'sales', label: 'Sales Promo' }
+          ]
+        };
+        return res.json({ reply, sessionId, ui });
+      }
+      // assume yes
+      state.stage = 'bizPI';
+      reply = `📑 Proforma Invoice (PI) generated for Request ID ${
+        state.data.biz.requestId
+      }.\n\n• Value: ${formatCurrencyInr(
+        state.data.biz.quote.net
+      )} (after discount)\n• Validity: 7 working days\n\nSent to your email: ${
+        state.data.biz.email
+      }\nPlease upload your Purchase Order (PO) here.`;
+      ui = {
+        kind: 'downloads',
+        title: 'Proforma Invoice',
+        items: [
+          {
+            label: 'Proforma Invoice (PDF)',
+            url: '/Proforma_Invoice_GC2025-002.pdf'
+          }
+        ]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizPI') {
+      const t = userMessage.toLowerCase();
+      if (t === 'continue' || t === 'upload' || t === 'po') {
+        state.stage = 'bizPIUpload';
+        reply = 'Please upload your Purchase Order (PO).';
+        ui = { kind: 'uploadPO', title: 'Upload Purchase Order' };
+        return res.json({ reply, sessionId, ui });
+      }
+      // if user already sent a filename, accept as PO
+      if (t.includes('po_') || t.endsWith('.pdf')) {
+        state.stage = 'bizPOValidated';
+        reply =
+          '✅ PO received and validated. You can now proceed with payment.\n\nPlease complete payment via the link below 👇\n[💳 Pay Now]\nPayment Options: UPI / NEFT / Netbanking\n\nFor assistance during payment, call 0124-6236000 (Mon–Fri, 10AM–6PM).';
+        ui = { kind: 'payment', title: 'Mock Payment Gateway' };
+        return res.json({ reply, sessionId, ui });
+      }
+      // re-show downloads and prompt
+      reply = 'Download the PI and upload your PO to proceed.';
+      ui = {
+        kind: 'downloads',
+        title: 'Proforma Invoice',
+        items: [
+          {
+            label: 'Proforma Invoice (PDF)',
+            url: '/Proforma_Invoice_GC2025-002.pdf'
+          }
+        ]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizPIUpload') {
+      // treat any message as PO uploaded
+      state.stage = 'bizPOValidated';
+      reply =
+        '✅ PO received and validated. You can now proceed with payment.\n\nPlease complete payment via the link below 👇\n[💳 Pay Now]\nPayment Options: UPI / NEFT / Netbanking\n\nFor assistance during payment, call 0124-6236000 (Mon–Fri, 10AM–6PM).';
+      ui = { kind: 'payment', title: 'Mock Payment Gateway' };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizPOValidated') {
+      const t = userMessage.toLowerCase();
+      if (t.includes('paid') || t.includes('payment')) {
+        state.stage = 'bizIssued';
+        reply =
+          '✅ Payment received. GST Invoice sent to your email & available here: [Download Invoice]';
+        ui = {
+          kind: 'download',
+          title: 'GST Invoice',
+          url: '/gst-invoice.pdf',
+          label: 'Download Invoice (PDF)'
+        };
+        return res.json({ reply, sessionId, ui });
+      }
+      reply = 'Please confirm once payment is completed (type: paid).';
+      return res.json({ reply, sessionId });
+    }
+
+    if (state.stage === 'bizIssued') {
+      state.stage = 'bizFinal';
+      reply =
+        '🎉 Your Amazon Pay Gift Cards have been issued!\nDelivery Method: Bulk CSV file sent to your email.\nSample card: XXXX-XXXX-5678 (₹1,000, Valid till Dec 2026)\n\nDownload full file securely: [Download GCs]';
+      ui = {
+        kind: 'downloads',
+        title: 'Downloads',
+        items: [{ label: 'GC Delivery (PDF)', url: '/gc-delivery.pdf' }]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizFinal') {
+      // support simple redemption check command
+      const m = userMessage.match(/^check\s+gc\s*(\w+)/i);
+      state.data.biz.checksToday = state.data.biz.checksToday || 0;
+      if (m) {
+        if (state.data.biz.checksToday >= 5) {
+          reply =
+            '⚠️ You’ve reached today’s limit of 5 redemption checks. For additional queries, please contact 0124-6236000.';
+          return res.json({ reply, sessionId });
+        }
+        state.data.biz.checksToday += 1;
+        reply = `✅ Gift Card ${m[1]} → Unredeemed, Balance ₹1,000`;
+        return res.json({ reply, sessionId });
+      }
+      const t = userMessage.trim().toLowerCase();
+      if (t === 'feedback') {
+        state.stage = 'bizFeedback';
+        reply =
+          'We’d love your feedback. Please rate 1-5 and share any comments.';
+        ui = { kind: 'feedbackForm' };
+        return res.json({ reply, sessionId, ui });
+      }
+      if (t === 'offers') {
+        reply =
+          'Great! Early-bird offers for Diwali 2025 are available. Our team will reach out with details.';
+        return res.json({ reply, sessionId });
+      }
+      reply =
+        '🙏 Thank you for choosing Amazon Pay Gift Cards! Reply “offers” to explore festive offers or “feedback” to share feedback.';
+      ui = {
+        kind: 'options',
+        title: 'What next?',
+        options: [
+          { id: 'offers', label: '🎁 Explore Festive Offers' },
+          { id: 'feedback', label: '✅ Share Feedback' }
+        ]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizFeedback') {
+      const text = userMessage.trim();
+      const rating = parseInt(text, 10);
+      state.data.biz.feedback = state.data.biz.feedback || {};
+      if (!state.data.biz.feedback.rating && rating >= 1 && rating <= 5) {
+        state.data.biz.feedback.rating = rating;
+        reply = 'Thanks! Please share any comments (optional).';
+        ui = { kind: 'feedbackForm' };
+        return res.json({ reply, sessionId, ui });
+      }
+      if (text.length > 0) {
+        state.data.biz.feedback.comments = text;
+      }
+      state.stage = 'bizFinal';
+      reply = '🙏 Thanks for your feedback!';
+      ui = {
+        kind: 'options',
+        title: 'What next?',
+        options: [{ id: 'offers', label: '🎁 Explore Festive Offers' }]
       };
       return res.json({ reply, sessionId, ui });
     }

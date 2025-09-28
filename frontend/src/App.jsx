@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL ||
-  'https://amazon-pay-gift-card-backend.onrender.com';
+  import.meta.env.VITE_BACKEND_URL || 'https://amazon-pay-bot.onrender.com';
 
 function MessageBubble({ author, text }) {
   const isBot = author === 'bot';

@@ -3,6 +3,8 @@ import React, { useEffect, useRef, useState } from 'react';
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL || 'https://amazon-pay-bot.onrender.com';
 
+// import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+
 function MessageBubble({ author, text }) {
   const isBot = author === 'bot';
   return (
@@ -62,6 +64,12 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Load existing session id to preserve conversations across refresh
+  useEffect(() => {
+    const saved = localStorage.getItem('sessionId');
+    if (saved) setSessionId(saved);
+  }, []);
+
   async function sendMessage(manualText) {
     const text = (manualText ?? input).trim();
     if (!text || loading) return;
@@ -70,13 +78,21 @@ export default function App() {
     setMessages(next);
     setLoading(true);
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20000);
       const res = await fetch(`${BACKEND_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, message: text })
+        body: JSON.stringify({ sessionId, message: text }),
+        signal: controller.signal
       });
+      clearTimeout(timer);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
       setSessionId(data.sessionId || sessionId);
+      if (data.sessionId) localStorage.setItem('sessionId', data.sessionId);
       setUi(data.ui || null);
       setShowPicker(false);
       setMessages([...next, { author: 'bot', text: data.reply }]);
@@ -126,6 +142,9 @@ export default function App() {
           {messages.map((m, i) => (
             <MessageBubble key={i} author={m.author} text={m.text} />
           ))}
+          {loading && messages[messages.length - 1]?.author === 'user' && (
+            <MessageBubble author='bot' text='typing…' />
+          )}
           <div ref={bottomRef} />
           {ui &&
             !showPicker &&
@@ -133,6 +152,8 @@ export default function App() {
             ui.kind !== 'downloads' && (
               <ActionBubble
                 ui={ui}
+                sendMessage={sendMessage}
+                setUi={setUi}
                 onOpen={(kind, payload) => {
                   const isStart =
                     kind === 'start' || payload?.options?.[0]?.id === 'start';
@@ -387,15 +408,26 @@ export default function App() {
               <div
                 className='button-row'
                 style={{ justifyContent: 'flex-end', marginTop: 10 }}>
-                <button
-                  className='confirm'
-                  onClick={() => {
+                <input
+                  type='file'
+                  accept='application/pdf'
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const isPdf =
+                      file.type === 'application/pdf' ||
+                      file.name.toLowerCase().endsWith('.pdf');
+                    const under10mb = file.size <= 10 * 1024 * 1024;
+                    if (!isPdf || !under10mb) {
+                      alert('Please select a PDF file under 10 MB.');
+                      return;
+                    }
+                    // In this mock, we just notify backend that PO is uploaded
                     setShowPicker(false);
                     setUi(null);
-                    sendMessage('po_uploaded.pdf');
-                  }}>
-                  Upload PDF
-                </button>
+                    sendMessage('po_uploaded');
+                  }}
+                />
               </div>
             </div>
           </Modal>
@@ -559,7 +591,7 @@ function BizLeadForm({ onSubmit }) {
 
 function BizVerificationForm({ onSubmit }) {
   const [fullName, setFullName] = useState('');
-  const [company, setCompany] = useState('');
+  const [companyName, setCompanyName] = useState(' ABC Private limited');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [gstin, setGstin] = useState('');
@@ -567,24 +599,68 @@ function BizVerificationForm({ onSubmit }) {
   const [ifsc, setIfsc] = useState('');
   const [step, setStep] = useState(1);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
+
+  const patterns = {
+    email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+    phone: /^(\+?\d{10,15})$/,
+    gstin: /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/,
+    ifsc: /^[A-Z]{4}0[A-Z0-9]{6}$/,
+    bankAccount: /^\d{8,20}$/
+  };
+
+  const validateStep1 = () => {
+    const errs = {};
+    if (!fullName.trim()) errs.fullName = 'Full name is required';
+    if (!patterns.phone.test(String(phone).replace(/\s|-/g, '')))
+      errs.phone = 'Enter valid phone (10-15 digits)';
+    if (!patterns.email.test(String(email).toLowerCase()))
+      errs.email = 'Enter a valid official email';
+    if (!patterns.gstin.test(String(gstin).toUpperCase()))
+      errs.gstin = 'Enter a valid 15-char GSTIN';
+    const zeros = (gstin || '').match(/0/g) || [];
+    if (zeros.length >= 4)
+      errs.gstin =
+        'Cannot verify. GSTIN looks invalid. Please enter correct details.';
+    if (!patterns.bankAccount.test(String(bankAccount)))
+      errs.bankAccount = 'Account number must be 8-20 digits';
+    if (!patterns.ifsc.test(String(ifsc).toUpperCase()))
+      errs.ifsc = 'Enter a valid IFSC (e.g., HDFC0001234)';
+    setFieldErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
 
   const handleSubmit = e => {
     e.preventDefault();
     if (step === 1) {
-      // Check for invalid GSTIN (4 or more zeros)
-      const gstinZeros = (gstin || '').match(/0/g) || [];
-      if (gstinZeros.length >= 4) {
-        setError(
-          'Cannot verify your business details. Please go back and enter correct details.'
-        );
+      if (!validateStep1()) {
+        setError('Please correct the highlighted fields and try again.');
         setStep(3); // Error step
         return;
       }
+      setError('');
       setStep(2);
     } else if (step === 2) {
-      onSubmit({ fullName, company, phone, email, gstin, bankAccount, ifsc });
+      onSubmit({
+        fullName,
+        company: companyName,
+        phone,
+        email,
+        gstin,
+        bankAccount,
+        ifsc
+      });
     }
   };
+
+  // Derive/display company name from GSTIN (mocked for this demo)
+  function deriveCompanyFromGstin(value) {
+    const v = String(value || '').trim();
+    if (v.length >= 15) {
+      return ' ABC Private limited';
+    }
+    return ' ABC Private limited';
+  }
 
   if (step === 2) {
     return (
@@ -620,9 +696,9 @@ function BizVerificationForm({ onSubmit }) {
               display: 'block',
               marginBottom: '4px'
             }}>
-            Company Name:
+            Legal Name:
           </strong>
-          <span style={{ fontSize: '14px', color: '#333' }}>{company}</span>
+          <span style={{ fontSize: '14px', color: '#333' }}>{companyName}</span>
         </div>
 
         <div style={{ marginBottom: '16px' }}>
@@ -784,46 +860,78 @@ function BizVerificationForm({ onSubmit }) {
       <input
         value={fullName}
         onChange={e => setFullName(e.target.value)}
-        placeholder='Enter your full name'
+        placeholder='Ravi Kumar'
         required
       />
-      <label>Company Name</label>
-      <input
-        value={company}
-        onChange={e => setCompany(e.target.value)}
-        placeholder='Enter company name'
-        required
-      />
+      {fieldErrors.fullName && (
+        <div style={{ color: '#dc3545', fontSize: '12px' }}>
+          {fieldErrors.fullName}
+        </div>
+      )}
+      {/* Company field removed per requirements */}
       <label>Phone</label>
       <input
         type='tel'
         value={phone}
         onChange={e => setPhone(e.target.value)}
-        placeholder='Enter phone number'
+        placeholder='9876543210'
         required
       />
+      {fieldErrors.phone && (
+        <div style={{ color: '#dc3545', fontSize: '12px' }}>
+          {fieldErrors.phone}
+        </div>
+      )}
       <label>Official E-mail Id</label>
       <input
         type='email'
         value={email}
         onChange={e => setEmail(e.target.value)}
-        placeholder='Enter official email'
+        placeholder='ravi.kumar@company.com'
         required
       />
+      {fieldErrors.email && (
+        <div style={{ color: '#dc3545', fontSize: '12px' }}>
+          {fieldErrors.email}
+        </div>
+      )}
       <label>Business GSTIN</label>
       <input
         value={gstin}
-        onChange={e => setGstin(e.target.value)}
-        placeholder='Enter GSTIN'
+        onChange={e => {
+          const val = e.target.value.toUpperCase();
+          setGstin(val);
+          setCompanyName(deriveCompanyFromGstin(val));
+        }}
+        placeholder='27ABCDE1234F1Z5'
         required
       />
-      <label>Bank account</label>
+      {gstin.trim() && (
+        <div className='muted small' style={{ marginTop: 4 }}>
+          Legal Name: {companyName}
+        </div>
+      )}
+      {fieldErrors.gstin && (
+        <div style={{ color: '#dc3545', fontSize: '12px' }}>
+          {fieldErrors.gstin}
+        </div>
+      )}
+      <label>Bank account number</label>
       <input
         value={bankAccount}
         onChange={e => setBankAccount(e.target.value)}
-        placeholder='Same as GST entity'
+        placeholder={
+          gstin.trim()
+            ? `Enter Bank account number for ${companyName}`
+            : 'Enter Bank account number'
+        }
         required
       />
+      {fieldErrors.bankAccount && (
+        <div style={{ color: '#dc3545', fontSize: '12px' }}>
+          {fieldErrors.bankAccount}
+        </div>
+      )}
       <label>IFSC Code</label>
       <input
         value={ifsc}
@@ -831,6 +939,11 @@ function BizVerificationForm({ onSubmit }) {
         placeholder='Enter IFSC code'
         required
       />
+      {fieldErrors.ifsc && (
+        <div style={{ color: '#dc3545', fontSize: '12px' }}>
+          {fieldErrors.ifsc}
+        </div>
+      )}
       <div className='muted small' style={{ marginTop: 16, marginBottom: 8 }}>
         To enable bulk orders & GST‑invoicing safely, we verify your company
         details with a quick ₹2 deposit.{' '}
@@ -1141,11 +1254,7 @@ function BizDeliveryForm({ email, onSubmit }) {
       <label>Delivery Email</label>
       {!isEditing ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <input
-            value={deliveryEmail}
-            readOnly
-            style={{ backgroundColor: '#f5f5f5' }}
-          />
+          <input value={deliveryEmail} readOnly />
           <button
             type='button'
             onClick={() => setIsEditing(true)}
@@ -1173,9 +1282,33 @@ function BizDeliveryForm({ email, onSubmit }) {
     </form>
   );
 }
-function ActionBubble({ ui, onOpen }) {
+function ActionBubble({ ui, onOpen, sendMessage, setUi }) {
   const inferredStart =
     ui.options && ui.options.length === 1 && ui.options[0].id === 'start';
+
+  // Handle start kind with multiple options
+  if (ui.kind === 'start' && ui.options && ui.options.length > 1) {
+    return (
+      <div className='row left'>
+        <div className='bubble bot'>
+          <div className='option-grid'>
+            {ui.options.map((option, index) => (
+              <button
+                key={index}
+                className='option'
+                onClick={() => {
+                  setUi(null);
+                  sendMessage(option.id);
+                }}>
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const label =
     ui.kind === 'start' || inferredStart
       ? 'Buy a Gift Card'
@@ -1197,7 +1330,7 @@ function ActionBubble({ ui, onOpen }) {
     <div className='row left'>
       <div className='bubble bot'>
         <button className='action-button' onClick={() => onOpen(ui.kind, ui)}>
-          {ui.kind === 'bizVerificationForm' ? 'Proceed' : `Open • ${label}`}
+          {ui.kind === 'bizVerificationForm' ? 'Proceed' : `${label}`}
         </button>
       </div>
     </div>
@@ -1206,14 +1339,22 @@ function ActionBubble({ ui, onOpen }) {
 
 function PaymentForm({ onSubmit }) {
   const [method, setMethod] = useState('neft');
-  const [input, setInput] = useState('');
+  const [cardNumber, setCardNumber] = useState('');
+  const [cvv, setCvv] = useState('');
+  const [expiryDate, setExpiryDate] = useState('');
+  const [utrNumber, setUtrNumber] = useState('');
+
+  const handleSubmit = e => {
+    e.preventDefault();
+    if (method === 'card') {
+      onSubmit({ method, cardNumber, cvv, expiryDate });
+    } else {
+      onSubmit({ method, utrNumber });
+    }
+  };
+
   return (
-    <form
-      className='lead-form'
-      onSubmit={e => {
-        e.preventDefault();
-        onSubmit({ method, input });
-      }}>
+    <form className='lead-form' onSubmit={handleSubmit}>
       <label>Payment Method</label>
       <div className='option-grid'>
         <button
@@ -1229,8 +1370,55 @@ function PaymentForm({ onSubmit }) {
           Credit Card
         </button>
       </div>
-      <label>{method === 'card' ? 'Card Number' : 'Account / Ref ID'}</label>
-      <input value={input} onChange={e => setInput(e.target.value)} required />
+
+      {method === 'neft' ? (
+        <>
+          <label>UTR Number</label>
+          <input
+            type='text'
+            value={utrNumber}
+            onChange={e => setUtrNumber(e.target.value)}
+            placeholder='e.g., 12345678901234567890'
+            required
+          />
+        </>
+      ) : (
+        <>
+          <label>Card Number</label>
+          <input
+            type='text'
+            value={cardNumber}
+            onChange={e => setCardNumber(e.target.value)}
+            placeholder='1234 5678 9012 3456'
+            required
+          />
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <div style={{ flex: 1 }}>
+              <label>CVV</label>
+              <input
+                type='text'
+                value={cvv}
+                onChange={e => setCvv(e.target.value)}
+                placeholder='123'
+                maxLength='3'
+                required
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label>Expiry Date</label>
+              <input
+                type='text'
+                value={expiryDate}
+                onChange={e => setExpiryDate(e.target.value)}
+                placeholder='MM/YY'
+                maxLength='5'
+                required
+              />
+            </div>
+          </div>
+        </>
+      )}
+
       <div className='muted small' style={{ marginTop: 8 }}>
         💳 Before completing your payment, please keep in mind:
         <br />

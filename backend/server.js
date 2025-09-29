@@ -14,6 +14,9 @@ const sessions = new Map();
 
 const PORT = process.env.PORT || 3001;
 
+const FALLBACK_MSG =
+  'Hi! Looks like you have replied with a message that we don’t recognize. Please select the correct option to continue.';
+
 function generateSessionId() {
   if (crypto.randomUUID) {
     return crypto.randomUUID();
@@ -156,7 +159,7 @@ function summarizeOrder(data) {
     `- Recipient: ${recipientSummary}\n` +
     `- Personal message: ${personal}\n` +
     `- Delivery date: ${dateLabel}\n\n` +
-    `Reply "confirm" to place order or "cancel" to abort.`
+    `Review the details and confirm to place the order.`
   );
 }
 
@@ -169,15 +172,36 @@ app.post('/chat', (req, res) => {
     let reply = '';
     let ui = undefined; // optional UI hints for frontend (options, templates, confirm)
 
+    // Remember last reply and UI so we can re-surface options on unknown inputs
+    const originalJson = res.json.bind(res);
+    res.json = payload => {
+      try {
+        if (payload && typeof payload === 'object') {
+          if (typeof payload.reply === 'string') {
+            state.lastReply = payload.reply;
+          }
+          if (Object.prototype.hasOwnProperty.call(payload, 'ui')) {
+            state.lastUi = payload.ui;
+          }
+        }
+      } catch (_) {
+        // no-op safeguard
+      }
+      return originalJson(payload);
+    };
+
     // Global restart handler: if user says hi/hello/hey at any time, show welcome + Start button
     if (/\b(hi|hello|hey)\b/i.test(userMessage)) {
       state.stage = 'awaitStart';
       state.data = {};
       reply =
-        '👋 Welcome to Amazon Pay Gift Cards – powered by Pine Labs!\nFreedom of choice, easy to use, and loved by everyone.\n\n✅ Buy instantly for business or personal use\n🎁 Simple gifting for employees, clients, family & friends\n\n👉 Ready to get started? Tap below:\n🛒 Buy Gift Cards';
+        '👋 Welcome to Amazon Pay Gift Cards – powered by Pine Labs!\nFreedom of choice, easy to use, and loved by everyone.\n\n✅ Buy instantly for business or personal use\n🎁 Simple gifting for employees, clients, family & friends\n\n👉 Ready to get started?';
       ui = {
         kind: 'start',
-        options: [{ id: 'start', label: '🛒 Buy Gift Cards' }]
+        options: [
+          { id: 'start', label: '🛒 Buy Gift Card' },
+          { id: 'knowmore', label: 'ℹ️ Know More' }
+        ]
       };
       return res.json({ reply, sessionId, ui });
     }
@@ -208,13 +232,14 @@ app.post('/chat', (req, res) => {
         state.stage = 'bizOptions';
         state.data.biz = { checksToday: 0 };
         reply =
-          '✨ How can we help you today?\n\n1️⃣ Purchase Gift Cards for my business\n2️⃣ View past orders\n\n👉 Reply with 1 or 2';
+          '✨ How can we help you today?\n\n1️⃣ Purchase Gift Cards for my business\n2️⃣ View past orders\n3️⃣ Back';
         ui = {
           kind: 'options',
           title: 'Business Options',
           options: [
             { id: 'purchase', label: '1️⃣ Purchase Gift Cards for my business' },
-            { id: 'reports', label: '2️⃣ View past orders' }
+            { id: 'reports', label: '2️⃣ View past orders' },
+            { id: 'back', label: '3️⃣ Back' }
           ]
         };
         return res.json({ reply, sessionId, ui });
@@ -234,8 +259,8 @@ app.post('/chat', (req, res) => {
         };
         return res.json({ reply, sessionId, ui });
       }
-      // re-ask if invalid
-      reply = 'Please choose Personal/Self or Business.';
+      // invalid -> fallback with previous UI
+      reply = FALLBACK_MSG;
       ui = {
         kind: 'buyerTypeOptions',
         options: [
@@ -252,7 +277,7 @@ app.post('/chat', (req, res) => {
       if (text === 'start' || text.includes('buy')) {
         state.stage = 'askBuyerType';
         reply =
-          "✨ Great! Tell us who you're buying for:\n\n1️⃣ Myself / Friends & Family\n2️⃣ My Business (Employees / Clients)\n\n👉 Reply with 1 or 2";
+          "✨ Great! Tell us who you're buying for:\n\n1️⃣ Myself / Friends & Family\n2️⃣ My Business (Employees / Clients)\n\n ";
         ui = {
           kind: 'buyerTypeOptions',
           options: [
@@ -262,11 +287,24 @@ app.post('/chat', (req, res) => {
         };
         return res.json({ reply, sessionId, ui });
       }
+      if (text === 'knowmore' || text.includes('know')) {
+        // Provide more information and keep the user on the start step
+        reply =
+          '🎁 Amazon Pay Gift Cards - Everything You Need to Know\n\n✨ Key Features:\n• Accepted across millions of products on Amazon.in\n• Flexible denominations starting from ₹10\n• Business-friendly: GST invoice, discounts, and CSV delivery\n• Instant delivery and secure processing\n \n🔗Learn more: https://www.amazon.in/gift-card-store/\n\n✅ Ready to begin?';
+        ui = {
+          kind: 'start',
+          options: [{ id: 'start', label: '🛒 Buy Gift Cards' }]
+        };
+        return res.json({ reply, sessionId, ui });
+      }
       // Re-prompt start
-      reply = 'Tap the button to begin: Buy a Gift Card';
+      reply = 'Tap a button to begin: Buy a Gift Card or Know More';
       ui = {
         kind: 'start',
-        options: [{ id: 'start', label: 'Buy a Gift Card' }]
+        options: [
+          { id: 'start', label: 'Buy a Gift Card' },
+          { id: 'knowmore', label: 'Know More' }
+        ]
       };
       return res.json({ reply, sessionId, ui });
     }
@@ -287,13 +325,14 @@ app.post('/chat', (req, res) => {
       // proceed to business options
       state.stage = 'bizOptions';
       reply =
-        '✨ How can we help you today?\n\n1️⃣ Purchase Gift Cards for my business\n2️⃣ View past orders\n\n👉 Reply with 1 or 2';
+        '✨ How can we help you today?\n\n1️⃣ Purchase Gift Cards for my business\n2️⃣ View past orders\n3️⃣ Back';
       ui = {
         kind: 'options',
         title: 'Business Options',
         options: [
           { id: 'purchase', label: '1️⃣ Purchase Gift Cards for my business' },
-          { id: 'reports', label: '2️⃣ View past orders' }
+          { id: 'reports', label: '2️⃣ View past orders' },
+          { id: 'back', label: '3️⃣ Back' }
         ]
       };
       return res.json({ reply, sessionId, ui });
@@ -314,7 +353,7 @@ app.post('/chat', (req, res) => {
         // proceed to reports and queries
         state.stage = 'bizReports';
         reply =
-          '📊 Welcome to Reports & Queries. What would you like to do?\n\n1️⃣ Download past order invoices\n2️⃣ Download past delivery reports (CSV)\n3️⃣ Raise a query\n\n👉 Reply with 1, 2, or 3';
+          'How can we help you?\n\n1️⃣ Download past order invoices\n2️⃣ Download past delivery reports (CSV)\n3️⃣ Back\n\nFor further support contact: 1800 123456';
         ui = {
           kind: 'options',
           title: 'Reports & Queries',
@@ -324,20 +363,34 @@ app.post('/chat', (req, res) => {
               id: 'delivery',
               label: '2️⃣ Download past delivery reports (CSV)'
             },
-            { id: 'query', label: '3️⃣ Raise a query' }
+            { id: 'back', label: '3️⃣ Back' }
           ]
         };
         return res.json({ reply, sessionId, ui });
       }
-      // re-ask if invalid
-      reply =
-        '✨ How can we help you today?\n\n1️⃣ Purchase Gift Cards for my business\n2️⃣ View past orders\n\n👉 Reply with 1 or 2';
+      if (text === '3' || text === 'back') {
+        // go back to buyer type selection
+        state.stage = 'askBuyerType';
+        reply =
+          "✨ Great! Tell us who you're buying for:\n\n1️⃣ Myself / Friends & Family\n2️⃣ My Business (Employees / Clients)\n\n ";
+        ui = {
+          kind: 'buyerTypeOptions',
+          options: [
+            { id: 'personal', label: '1️⃣ Myself / Friends & Family' },
+            { id: 'business', label: '2️⃣ My Business (Employees / Clients)' }
+          ]
+        };
+        return res.json({ reply, sessionId, ui });
+      }
+      // invalid -> fallback with previous UI
+      reply = FALLBACK_MSG;
       ui = {
         kind: 'options',
         title: 'Business Options',
         options: [
           { id: 'purchase', label: '1️⃣ Purchase Gift Cards for my business' },
-          { id: 'reports', label: '2️⃣ View past orders' }
+          { id: 'reports', label: '2️⃣ View past orders' },
+          { id: 'back', label: '3️⃣ Back' }
         ]
       };
       return res.json({ reply, sessionId, ui });
@@ -404,7 +457,8 @@ app.post('/chat', (req, res) => {
       // Accept batch string from frontend with enhanced business details
       const batch = parseBatchLead(userMessage);
       if (!batch) {
-        // fallback: show form again
+        // fallback: show form again with generic fallback message
+        reply = FALLBACK_MSG;
         ui = { kind: 'bizVerificationForm' };
         return res.json({ reply, sessionId, ui });
       }
@@ -418,8 +472,7 @@ app.post('/chat', (req, res) => {
         !batch.bankAccount ||
         !batch.ifsc
       ) {
-        reply =
-          'Please provide valid Name, Company, Phone, Email, GSTIN, Bank Account, and IFSC.';
+        reply = FALLBACK_MSG;
         ui = { kind: 'bizVerificationForm' };
         return res.json({ reply, sessionId, ui });
       }
@@ -429,7 +482,7 @@ app.post('/chat', (req, res) => {
         String(batch.phone).replace(/\s|-/g, '')
       );
       if (!phoneOk) {
-        reply = 'Please provide a valid phone number.';
+        reply = FALLBACK_MSG;
         ui = { kind: 'bizVerificationForm' };
         return res.json({ reply, sessionId, ui });
       }
@@ -515,7 +568,7 @@ app.post('/chat', (req, res) => {
               0
             );
 
-            state.stage = 'bizNeedsDelivery';
+            state.stage = 'bizNeedsDeliveryEmail';
             reply =
               '📧 Confirm your delivery email: ' +
               state.data.biz.email +
@@ -551,7 +604,7 @@ app.post('/chat', (req, res) => {
           state.data.biz.quantity = quantity;
           state.data.biz.denomination = denomination;
           state.data.biz.totalAmount = total;
-          state.stage = 'bizNeedsDelivery';
+          state.stage = 'bizNeedsDeliveryEmail';
           reply =
             '📧 Confirm your delivery email: ' +
             state.data.biz.email +
@@ -592,7 +645,7 @@ app.post('/chat', (req, res) => {
         return res.json({ reply, sessionId, ui });
       }
 
-      state.stage = 'bizNeedsDelivery';
+      state.stage = 'bizNeedsDeliveryEmail';
       reply =
         '📧 Confirm your delivery email: ' +
         state.data.biz.email +
@@ -608,7 +661,7 @@ app.post('/chat', (req, res) => {
       return res.json({ reply, sessionId, ui });
     }
 
-    if (state.stage === 'bizNeedsDelivery') {
+    if (state.stage === 'bizNeedsDeliveryEmail') {
       const text = userMessage.toLowerCase();
 
       if (text === 'confirm') {
@@ -636,8 +689,7 @@ app.post('/chat', (req, res) => {
           title: 'Order Summary',
           options: [
             { id: 'yes', label: '1️⃣ Yes, share PI' },
-            { id: 'edit', label: '2️⃣ Edit order' },
-            { id: 'form', label: '3️⃣ Enter requirements manually' }
+            { id: 'edit', label: '2️⃣ Edit order' }
           ]
         };
         return res.json({ reply, sessionId, ui });
@@ -675,8 +727,7 @@ app.post('/chat', (req, res) => {
           title: 'Order Summary',
           options: [
             { id: 'yes', label: '1️⃣ Yes, share PI' },
-            { id: 'edit', label: '2️⃣ Edit order' },
-            { id: 'form', label: '3️⃣ Enter requirements manually' }
+            { id: 'edit', label: '2️⃣ Edit order' }
           ]
         };
         return res.json({ reply, sessionId, ui });
@@ -737,23 +788,14 @@ app.post('/chat', (req, res) => {
         };
         return res.json({ reply, sessionId, ui });
       }
-      if (text === '3' || text === 'form') {
-        // Open manual requirements form
-        state.stage = 'bizManualRequirements';
-        reply = 'Please enter your requirements manually:';
-        ui = { kind: 'bizOrderForm' };
-        return res.json({ reply, sessionId, ui });
-      }
       // re-ask if invalid
-      reply =
-        'Please choose:\n1️⃣ Yes, share PI\n2️⃣ Edit order\n3️⃣ Enter requirements manually';
+      reply = 'Please choose:\n1️⃣ Yes, share PI\n2️⃣ Edit order';
       ui = {
         kind: 'options',
         title: 'Order Summary',
         options: [
           { id: 'yes', label: '1️⃣ Yes, share PI' },
-          { id: 'edit', label: '2️⃣ Edit order' },
-          { id: 'form', label: '3️⃣ Enter requirements manually' }
+          { id: 'edit', label: '2️⃣ Edit order' }
         ]
       };
       return res.json({ reply, sessionId, ui });
@@ -796,8 +838,7 @@ app.post('/chat', (req, res) => {
             title: 'Order Summary',
             options: [
               { id: 'yes', label: '1️⃣ Yes, share PI' },
-              { id: 'edit', label: '2️⃣ Edit order' },
-              { id: 'form', label: '3️⃣ Enter requirements manually' }
+              { id: 'edit', label: '2️⃣ Edit order' }
             ]
           };
           return res.json({ reply, sessionId, ui });
@@ -845,8 +886,7 @@ app.post('/chat', (req, res) => {
           title: 'Order Summary',
           options: [
             { id: 'yes', label: '1️⃣ Yes, share PI' },
-            { id: 'edit', label: '2️⃣ Edit order' },
-            { id: 'form', label: '3️⃣ Enter requirements manually' }
+            { id: 'edit', label: '2️⃣ Edit order' }
           ]
         };
         return res.json({ reply, sessionId, ui });
@@ -895,7 +935,7 @@ app.post('/chat', (req, res) => {
         return res.json({ reply, sessionId });
       }
       state.data.biz.budget = budget;
-      state.stage = 'bizNeedsDelivery';
+      state.stage = 'bizNeedsDeliveryMethod';
       reply = 'Preferred delivery method?';
       ui = {
         kind: 'options',
@@ -908,7 +948,7 @@ app.post('/chat', (req, res) => {
       return res.json({ reply, sessionId, ui });
     }
 
-    if (state.stage === 'bizNeedsDelivery') {
+    if (state.stage === 'bizNeedsDeliveryMethod') {
       state.data.biz.delivery = userMessage.toLowerCase();
       state.stage = 'bizDiscount';
       reply =
@@ -917,6 +957,26 @@ app.post('/chat', (req, res) => {
         kind: 'options',
         title: 'Continue',
         options: [{ id: 'continue', label: 'Proceed to quotation' }]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    // After PI is shared, accept PO upload confirmation and move to payment instructions
+    if (state.stage === 'bizPI') {
+      state.stage = 'bizPaymentInfo';
+      const discount = state.data.biz.discountEligible
+        ? Math.round(state.data.biz.totalAmount * 0.01)
+        : 0;
+      const netAmount = state.data.biz.totalAmount - discount;
+      reply = `📑 PI generated → Request ID: ${
+        state.data.biz.requestId
+      }\n• Value: ₹${netAmount.toLocaleString()} (after discount)\n• Validity: 7 working days\n📧 Sent to: ${
+        state.data.biz.deliveryEmail || state.data.biz.email
+      }`;
+      ui = {
+        kind: 'options',
+        title: 'Proforma Invoice Generated',
+        options: [{ id: 'proceed', label: 'Proceed' }]
       };
       return res.json({ reply, sessionId, ui });
     }
@@ -994,13 +1054,16 @@ app.post('/chat', (req, res) => {
     if (state.stage === 'bizPaymentInfo') {
       const text = userMessage.toLowerCase();
       if (text === 'proceed') {
-        state.stage = 'bizPaymentOptions';
+        state.stage = 'bizPaymentMethod';
         reply =
-          '💳 Before completing your payment, please keep in mind:\n\n• Carefully review your PI to ensure all details are correct.\n• For bank transfers, use the same GST company account shared during verification.\n• You can also pay conveniently using a Credit Card.';
+          '💳 Payment Instructions\n\nPlease review the following before proceeding:\n\n• Verify all details in your Proforma Invoice (PI) for accuracy\n• Bank transfers must be initiated from the same GST-registered company account used during verification\n• Credit Card payments are processed securely\n\n💳 Payment Options (quick replies):';
         ui = {
           kind: 'options',
-          title: 'Payment Instructions',
-          options: [{ id: 'understand', label: '✅ I Understand' }]
+          title: 'Select Payment Method',
+          options: [
+            { id: 'neft', label: 'NEFT / Netbanking' },
+            { id: 'credit', label: 'Credit Card' }
+          ]
         };
         return res.json({ reply, sessionId, ui });
       }
@@ -1022,32 +1085,6 @@ app.post('/chat', (req, res) => {
       return res.json({ reply, sessionId, ui });
     }
 
-    if (state.stage === 'bizPaymentOptions') {
-      const text = userMessage.toLowerCase();
-      if (text === 'understand') {
-        state.stage = 'bizPaymentMethod';
-        reply = 'Payment Options (quick replies):';
-        ui = {
-          kind: 'options',
-          title: 'Select Payment Method',
-          options: [
-            { id: 'neft', label: 'NEFT / Netbanking' },
-            { id: 'credit', label: 'Credit Card' }
-          ]
-        };
-        return res.json({ reply, sessionId, ui });
-      }
-      // Re-show payment instructions if invalid input
-      reply =
-        '💳 Before completing your payment, please keep in mind:\n\n• Carefully review your PI to ensure all details are correct.\n• For bank transfers, use the same GST company account shared during verification.\n• You can also pay conveniently using a Credit Card.';
-      ui = {
-        kind: 'options',
-        title: 'Payment Instructions',
-        options: [{ id: 'understand', label: '✅ I Understand' }]
-      };
-      return res.json({ reply, sessionId, ui });
-    }
-
     if (state.stage === 'bizPaymentMethod') {
       const text = userMessage.toLowerCase();
       if (text === 'neft' || text === 'credit') {
@@ -1058,8 +1095,8 @@ app.post('/chat', (req, res) => {
         ui = { kind: 'payment', title: 'Complete Payment' };
         return res.json({ reply, sessionId, ui });
       }
-      // Re-show payment options if invalid input
-      reply = 'Payment Options (quick replies):';
+      // invalid -> fallback with previous UI
+      reply = FALLBACK_MSG;
       ui = {
         kind: 'options',
         title: 'Select Payment Method',
@@ -1114,42 +1151,9 @@ app.post('/chat', (req, res) => {
     if (state.stage === 'bizReports') {
       const text = userMessage.toLowerCase();
       if (text === '1' || text === 'invoices') {
-        state.stage = 'bizReportInvoices';
-        reply = 'Please enter your Request ID (e.g., GC2025-7F2A).';
-        return res.json({ reply, sessionId });
-      }
-      if (text === '2' || text === 'delivery') {
-        state.stage = 'bizReportDelivery';
-        reply = 'Please enter your Request ID to fetch the delivery report.';
-        return res.json({ reply, sessionId });
-      }
-      if (text === '3' || text === 'query') {
-        state.stage = 'bizReportQuery';
-        reply = 'Please type your query below 👇';
-        return res.json({ reply, sessionId });
-      }
-      // re-ask if invalid
-      reply =
-        '📊 Welcome to Reports & Queries. What would you like to do?\n\n1️⃣ Download past order invoices\n2️⃣ Download past delivery reports (CSV)\n3️⃣ Raise a query\n\n👉 Reply with **1**, **2**, or **3**';
-      ui = {
-        kind: 'options',
-        title: 'Reports & Queries',
-        options: [
-          { id: 'invoices', label: '1️⃣ Download past order invoices' },
-          { id: 'delivery', label: '2️⃣ Download past delivery reports (CSV)' },
-          { id: 'query', label: '3️⃣ Raise a query' }
-        ]
-      };
-      return res.json({ reply, sessionId, ui });
-    }
-
-    if (state.stage === 'bizReportInvoices') {
-      const requestId = userMessage.trim();
-      if (requestId) {
         state.stage = 'bizReportComplete';
-        reply = `✅ Invoice for Request ID ${requestId}\n📧 Sent to ${
-          state.data.biz.email || 'your email'
-        }\n📥 Download here → [Download Invoice]`;
+        reply =
+          '✅ Invoice for orders placed in last 12 months\n📧 Sent to your email\n📥 Download here → [Download Invoice]';
         ui = {
           kind: 'download',
           title: 'Invoice',
@@ -1158,8 +1162,51 @@ app.post('/chat', (req, res) => {
         };
         return res.json({ reply, sessionId, ui });
       }
-      reply = 'Please enter your **Request ID** (e.g., GC2025-7F2A).';
-      return res.json({ reply, sessionId });
+      if (text === '2' || text === 'delivery') {
+        state.stage = 'bizReportDelivery';
+        reply = 'Please enter your Request ID to fetch the delivery report.';
+        return res.json({ reply, sessionId });
+      }
+      if (text === '3' || text === 'back') {
+        state.stage = 'bizOptions';
+        reply =
+          '✨ How can we help you today?\n\n1️⃣ Purchase Gift Cards for my business\n2️⃣ View past orders\n3️⃣ Back';
+        ui = {
+          kind: 'options',
+          title: 'Business Options',
+          options: [
+            { id: 'purchase', label: '1️⃣ Purchase Gift Cards for my business' },
+            { id: 'reports', label: '2️⃣ View past orders' },
+            { id: 'back', label: '3️⃣ Back' }
+          ]
+        };
+        return res.json({ reply, sessionId, ui });
+      }
+      // invalid -> fallback with previous UI
+      reply = FALLBACK_MSG;
+      ui = {
+        kind: 'options',
+        title: 'Reports & Queries',
+        options: [
+          { id: 'invoices', label: '1️⃣ Download past order invoices' },
+          { id: 'delivery', label: '2️⃣ Download past delivery reports (CSV)' },
+          { id: 'back', label: '3️⃣ Back' }
+        ]
+      };
+      return res.json({ reply, sessionId, ui });
+    }
+
+    if (state.stage === 'bizReportInvoices') {
+      state.stage = 'bizReportComplete';
+      reply =
+        '✅ Invoice for orders placed in last 12 months\n📧 Sent to your email\n📥 Download here → [Download Invoice]';
+      ui = {
+        kind: 'download',
+        title: 'Invoice',
+        url: '/gst-invoice.pdf',
+        label: 'Download Invoice (PDF)'
+      };
+      return res.json({ reply, sessionId, ui });
     }
 
     if (state.stage === 'bizReportDelivery') {
@@ -1198,13 +1245,14 @@ app.post('/chat', (req, res) => {
       if (text === '1' || text === 'purchase') {
         state.stage = 'bizOptions';
         reply =
-          '✨ How can we help you today?\n\n1️⃣ Purchase Gift Cards for my business\n2️⃣ View past orders\n\n👉 Reply with 1 or 2';
+          '✨ How can we help you today?\n\n1️⃣ Purchase Gift Cards for my business\n2️⃣ View past orders\n3️⃣ Back';
         ui = {
           kind: 'options',
           title: 'Business Options',
           options: [
             { id: 'purchase', label: '1️⃣ Purchase Gift Cards for my business' },
-            { id: 'reports', label: '2️⃣ View past orders' }
+            { id: 'reports', label: '2️⃣ View past orders' },
+            { id: 'back', label: '3️⃣ Back' }
           ]
         };
         return res.json({ reply, sessionId, ui });
@@ -1217,7 +1265,7 @@ app.post('/chat', (req, res) => {
         return res.json({ reply, sessionId });
       }
       reply =
-        "That's it for now! Would you like to go back to:\n1️⃣ Purchase Gift Cards\n2️⃣ Exit\n\n👉 Reply with 1 or 2";
+        "That's it for now! Would you like to go back to:\n1️⃣ Purchase Gift Cards\n2️⃣ Exit\n\n ";
       ui = {
         kind: 'options',
         title: 'What next?',
@@ -1351,7 +1399,7 @@ app.post('/chat', (req, res) => {
         templateId = m;
       }
       if (!templateId) {
-        reply = 'Please select a template.';
+        reply = FALLBACK_MSG;
         ui = {
           kind: 'templatePicker',
           templates: getTemplates()
@@ -1378,7 +1426,7 @@ app.post('/chat', (req, res) => {
     if (state.stage === 'askAmount') {
       let amount = normalizeAmount(userMessage);
       if (amount === null || amount <= 0) {
-        reply = 'Please enter a valid amount.';
+        reply = FALLBACK_MSG;
         ui = {
           kind: 'amountOptions',
           options: [
@@ -1424,7 +1472,7 @@ app.post('/chat', (req, res) => {
         `- Amount: ${formatCurrencyInr(state.data.amount)}\n` +
         `- Recipient Email: ${state.data.recipientEmail}\n` +
         `- Message: ${state.data.personalMessage || '(none)'}\n\n` +
-        `Type 'confirm' to place the order or 'cancel' to restart.`;
+        `Review and confirm to place the order, or cancel to restart.`;
       reply = summary;
       ui = {
         kind: 'confirm',
@@ -1469,7 +1517,7 @@ app.post('/chat', (req, res) => {
         reply = "Cancelled. Say 'hi' to start again.";
         return res.json({ reply, sessionId });
       }
-      reply = "Please reply with 'confirm' or 'cancel'.";
+      reply = 'Please review and confirm to proceed.';
       return res.json({ reply, sessionId });
     }
 
@@ -1481,7 +1529,11 @@ app.post('/chat', (req, res) => {
       return res.json({ reply, sessionId });
     }
 
-    reply = "Sorry, I didn't understand that. Say 'hi' to start.";
+    reply =
+      'Hi! Looks like you have replied with a message that we don’t recognize. Please select the correct option to continue.';
+    if (state.lastUi) {
+      return res.json({ reply, sessionId, ui: state.lastUi });
+    }
     return res.json({ reply, sessionId });
   } catch (err) {
     console.error('/chat error', err);
